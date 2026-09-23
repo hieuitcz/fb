@@ -59,14 +59,14 @@ jobs:
           echo "THEOS=$THEOS"; ls "$THEOS" | head -n 20
           make clean
           # shellcheck disable=SC2086
-          make THEOS_PACKAGE_SCHEME=rootless $EXTRA -j$(sysctl -n hw.ncpu)
+          make THEOS_PACKAGE_SCHEME=rootless messages=yes $EXTRA -j$(sysctl -n hw.ncpu)
           find .theos -type f -name "*.dylib" | head -n 20
 
       - name: Build OpenInFacebookSafariExtension (appex)
         working-directory: OpenInFacebookSafariExtension/src
         run: |
           make clean
-          make THEOS_PACKAGE_SCHEME=rootless -j$(sysctl -n hw.ncpu)
+          make THEOS_PACKAGE_SCHEME=rootless messages=yes -j$(sysctl -n hw.ncpu)
           find .theos -type d -name "*.appex" | head -n 20
 
       - name: Collect artifacts

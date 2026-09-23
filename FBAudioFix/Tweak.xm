@@ -24,6 +24,7 @@ static BOOL (*oCategoryModeRouteOptions)(AVAudioSession *, SEL, AVAudioSessionCa
 static void (*oVCViewDidAppear)(UIViewController *, SEL, BOOL) = NULL;
 static void (*oVCViewDidDisappear)(UIViewController *, SEL, BOOL) = NULL;
 
+static NSString *FBLogPath(void) __attribute__((unused));
 static NSString *FBLogPath(void) {
     NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     if (paths.count == 0) return nil;
@@ -33,7 +34,7 @@ static NSString *FBLogPath(void) {
 #ifndef FB_AUDIOFIX_LOG_ENABLED
 #define FB_AUDIOFIX_LOG_ENABLED 1
 #endif
-static const unsigned long long kFBLogMaxBytes = 256 * 1024;
+static const unsigned long long kFBLogMaxBytes __attribute__((unused)) = 256 * 1024;
 
 static void FBLog(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
 static void FBLog(NSString *format, ...) {
