@@ -1,0 +1,91 @@
+name: Build Tweaks
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      fb_log:
+        description: 'FB_LOG (1=debug log, 0=release tắt log)'
+        required: false
+        default: '0'
+        type: choice
+        options: ['0', '1']
+
+env:
+  THEOS_REF: master # ghim commit theos ở đây để build tái lập, vd: a1b2c3d...
+  XCODE_PATH: /Applications/Xcode_16.2.app/Contents/Developer
+  FB_LOG_DEFAULT: '0' # release mặc định tắt log file
+
+jobs:
+  build:
+    runs-on: macos-14 # pin image; đổi sang macos-15 chỉ khi đã test SDK
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          submodules: recursive
+
+      - name: Select Xcode 16.2
+        run: |
+          sudo xcode-select -s "$XCODE_PATH" || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Install dependencies
+        run: brew install --quiet ldid xz gnu-sed || true
+
+      - name: Setup Theos (pinned)
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          cd "$THEOS"
+          git checkout "$THEOS_REF"
+          git submodule update --init --recursive
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+
+      - name: Build FBAudioFix (dylib)
+        working-directory: FBAudioFix
+        run: |
+          FB_LOG="${{ inputs.fb_log || env.FB_LOG_DEFAULT }}"
+          EXTRA=""
+          if [ "$FB_LOG" = "0" ]; then EXTRA='ADDITIONAL_CFLAGS=-DFB_AUDIOFIX_LOG_ENABLED=0'; fi
+          echo "FB_LOG=$FB_LOG EXTRA=$EXTRA"
+          make clean
+          # shellcheck disable=SC2086
+          make package THEOS_PACKAGE_SCHEME=rootless $EXTRA -j$(sysctl -n hw.ncpu)
+          find .theos packages -type f \( -name "*.dylib" -o -name "*.deb" \) | head -n 20
+
+      - name: Build OpenInFacebookSafariExtension (appex)
+        working-directory: OpenInFacebookSafariExtension/src
+        run: |
+          make clean
+          make package THEOS_PACKAGE_SCHEME=rootless -j$(sysctl -n hw.ncpu)
+          find .theos -type d -name "*.appex" | head -n 20
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          find FBAudioFix/.theos -name "*.dylib" -exec cp -v {} out/ \;
+          find FBAudioFix/packages -name "*.deb" -exec cp -v {} out/ \; || true
+          find OpenInFacebookSafariExtension -name "*.appex" -maxdepth 6 -type d -exec cp -R -v {} out/ \; || true
+          ls -lhR out
+
+      - name: Verify outputs
+        run: |
+          file out/FBAudioFix.dylib
+          otool -L out/FBAudioFix.dylib
+          ldid -S out/FBAudioFix.dylib && echo "ldid fakesign OK"
+          test "$(lipo -archs out/FBAudioFix.dylib)" = "arm64" || (echo "arch != arm64" && exit 1)
+          plutil -lint OpenInFacebookSafariExtension/src/Resources/Info.plist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: fb-inject-out
+          path: out/
+          if-no-files-found: error
