@@ -8,7 +8,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = FBAudioFix
 FBAudioFix_FILES = Tweak.xm
 FBAudioFix_FRAMEWORKS = Foundation AVFoundation UIKit
-FBAudioFix_CFLAGS = -fobjc-arc -Wall -Wextra -Werror
+FBAudioFix_CFLAGS = -fobjc-arc -Wall -Wextra -Werror -fno-modules
 # Release: make package ADDITIONAL_CFLAGS="-DFB_AUDIOFIX_LOG_ENABLED=0"
 # Debug (log file Documents/FBAudioFix-*.txt, cap 256KB): default =1
 
