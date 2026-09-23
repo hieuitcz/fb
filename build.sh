@@ -99,7 +99,7 @@ fi
 
 ARGS=("$DYLIB")
 if [[ -n "$APPEX_DIR" ]]; then ARGS+=("$APPEX_DIR"); fi
-echo "==> cyan -f $INPUT + ${ARGS[*]} -> $OUTPUT"
-cyan -f -o "$OUTPUT" "$INPUT" "${ARGS[@]}"
+echo "==> cyan -i $INPUT -o $OUTPUT -f ${ARGS[*]}"
+cyan -i "$INPUT" -o "$OUTPUT" -f "${ARGS[@]}"
 unzip -l "$OUTPUT" | grep -E 'FBAudioFix.dylib|OpenInFacebookSafariExtension.appex'
 echo "OK: $OUTPUT"

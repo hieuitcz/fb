@@ -157,7 +157,7 @@ jobs:
           otool -L "$DYLIB"
           mkdir -p out
           OUT="$PWD/out/Glow-Facebook-${{ steps.glow.outputs.version }}-FBAudioFix.ipa"
-          cyan -f -o "$OUT" "$INPUT_IPA" "$DYLIB" "$APPEX"
+          cyan -i "$INPUT_IPA" -o "$OUT" -f "$DYLIB" "$APPEX"
           unzip -tq "$OUT" >/dev/null
           unzip -l "$OUT" | grep -E 'FBAudioFix.dylib|OpenInFacebookSafariExtension.appex'
           ls -lh "$OUT"
