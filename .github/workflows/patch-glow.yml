@@ -1,0 +1,187 @@
+name: Patch Glow IPA
+
+# Tải Glow for Facebook mới nhất từ esign.json, build FBAudioFix.dylib +
+# OpenInFacebookSafariExtension.appex từ source rồi inject thẳng vào IPA bằng cyan.
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: 'URL IPA sạch (để trống = tự lấy Glow mới nhất từ esign.json)'
+        required: false
+        default: ''
+        type: string
+      fb_log:
+        description: 'FB_LOG (1=debug log, 0=release tắt log)'
+        required: false
+        default: '0'
+        type: choice
+        options: ['0', '1']
+      force:
+        description: 'Build lại dù version này đã có release'
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: '0 3 * * 0' # Chủ nhật hàng tuần: tự bám Glow mới
+
+permissions:
+  contents: write
+
+env:
+  ESIGN_JSON: https://raw.githubusercontent.com/lehieuitpro-maker/ipa/main/esign.json
+  APP_NAME: Glow for Facebook
+  THEOS_REF: master # ghim commit theos ở đây để build tái lập
+  XCODE_PATH: /Applications/Xcode_16.2.app/Contents/Developer
+
+jobs:
+  patch:
+    runs-on: macos-15
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          submodules: recursive
+
+      - name: Select Xcode
+        run: |
+          ls /Applications | grep -i xcode || true
+          sudo xcode-select -s "$XCODE_PATH" || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
+          xcodebuild -version || true
+          xcrun --sdk iphoneos --show-sdk-version || true
+
+      - name: Install cyan / theos deps
+        run: |
+          set -euo pipefail
+          brew install --quiet ldid xz dpkg gnu-sed || brew install ldid xz dpkg gnu-sed || true
+          pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
+          cyan --help >/dev/null
+
+      - name: Setup Theos (pinned)
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          cd "$THEOS"
+          git checkout "$THEOS_REF"
+          git submodule update --init --recursive
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+
+      - name: Resolve Glow IPA (esign.json)
+        id: glow
+        env:
+          IPA_OVERRIDE: ${{ inputs.ipa_url }}
+        run: |
+          set -euo pipefail
+          if [ -n "$IPA_OVERRIDE" ]; then
+            echo "Dùng IPA override từ input."
+            VER="custom"
+            BUILD="custom"
+            URL="$IPA_OVERRIDE"
+          else
+            read -r URL VER BUILD <<<"$(python3 - "$ESIGN_JSON" "$APP_NAME" <<'EOF'
+          import json, sys, urllib.request
+          data = json.load(urllib.request.urlopen(sys.argv[1]))
+          want = sys.argv[2]
+          for app in data.get("apps", []):
+              if app.get("name") == want:
+                  print(app["downloadURL"], app.get("version", "unknown"), app.get("buildVersion", "unknown"))
+                  break
+          else:
+              print("Không thấy app trong esign.json. Có sẵn:", file=sys.stderr)
+              for app in data.get("apps", []):
+                  print(" -", app.get("name"), file=sys.stderr)
+              sys.exit(1)
+          EOF
+          )"
+          fi
+          echo "Glow version=$VER build=$BUILD"
+          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "version=$VER" >> $GITHUB_OUTPUT
+          echo "build=$BUILD" >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=glow-$VER-fbaudiofix" >> $GITHUB_OUTPUT
+
+      - name: Skip nếu version đã có release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          if [ "$FORCE" = "true" ]; then echo "force=true, build tiếp."; exit 0; fi
+          if gh release view '${{ steps.glow.outputs.RELEASE_TAG }}' >/dev/null 2>&1; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "Đã có release ${{ steps.glow.outputs.RELEASE_TAG }}, bỏ qua."
+          fi
+
+      - name: Download Glow IPA
+        if: env.SKIP != 'true'
+        env:
+          IPA_URL: ${{ steps.glow.outputs.url }}
+        run: |
+          set -euo pipefail
+          mkdir -p input
+          curl --fail --location --retry 3 --retry-delay 2 "$IPA_URL" -o input/Glow-clean.ipa
+          unzip -tq input/Glow-clean.ipa >/dev/null
+          ls -lh input/
+          echo "INPUT_IPA=$PWD/input/Glow-clean.ipa" >> "$GITHUB_ENV"
+
+      - name: Build FBAudioFix (dylib)
+        if: env.SKIP != 'true'
+        working-directory: FBAudioFix
+        run: |
+          FB_LOG='${{ inputs.fb_log }}'; FB_LOG="${FB_LOG:-0}"
+          EXTRA=""
+          if [ "$FB_LOG" = "0" ]; then EXTRA='ADDITIONAL_CFLAGS=-DFB_AUDIOFIX_LOG_ENABLED=0'; fi
+          echo "FB_LOG=$FB_LOG EXTRA=$EXTRA"
+          make clean
+          # shellcheck disable=SC2086
+          make THEOS_PACKAGE_SCHEME=rootless $EXTRA -j$(sysctl -n hw.ncpu)
+          find .theos -type f -name "*.dylib" | head -n 20
+
+      - name: Build OpenInFacebookSafariExtension (appex)
+        if: env.SKIP != 'true'
+        working-directory: OpenInFacebookSafariExtension/src
+        run: |
+          make clean
+          make THEOS_PACKAGE_SCHEME=rootless -j$(sysctl -n hw.ncpu)
+          find .theos -type d -name "*.appex" | head -n 20
+
+      - name: Inject bằng cyan + verify
+        if: env.SKIP != 'true'
+        run: |
+          set -euo pipefail
+          DYLIB="$(find FBAudioFix/.theos -name 'FBAudioFix.dylib' | head -n 1)"
+          APPEX="$(find OpenInFacebookSafariExtension -type d -name '*.appex' | head -n 1)"
+          test -n "$DYLIB"; test -n "$APPEX"
+          file "$DYLIB"
+          otool -L "$DYLIB"
+          mkdir -p out
+          OUT="$PWD/out/Glow-Facebook-${{ steps.glow.outputs.version }}-FBAudioFix.ipa"
+          cyan -f -o "$OUT" "$INPUT_IPA" "$DYLIB" "$APPEX"
+          unzip -tq "$OUT" >/dev/null
+          unzip -l "$OUT" | grep -E 'FBAudioFix.dylib|OpenInFacebookSafariExtension.appex'
+          ls -lh "$OUT"
+          echo "OUTPUT_IPA=$OUT" >> "$GITHUB_ENV"
+
+      - name: Upload workflow artifact
+        if: env.SKIP != 'true'
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: Glow-${{ steps.glow.outputs.version }}-FBAudioFix
+          path: ${{ env.OUTPUT_IPA }}
+          compression-level: 0
+
+      - name: Publish GitHub Release
+        if: env.SKIP != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.glow.outputs.RELEASE_TAG }}'
+          NOTES="Glow for Facebook ${{ steps.glow.outputs.version }} (build ${{ steps.glow.outputs.build }}) + FBAudioFix.dylib và Open in Facebook Safari extension, build từ source và inject bằng cyan -f."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$OUTPUT_IPA" --clobber
+            gh release edit "$TAG" --title "Glow ${{ steps.glow.outputs.version }} + FBAudioFix" --notes "$NOTES"
+          else
+            gh release create "$TAG" "$OUTPUT_IPA" --title "Glow ${{ steps.glow.outputs.version }} + FBAudioFix" --notes "$NOTES"
+          fi

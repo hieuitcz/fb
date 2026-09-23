@@ -32,13 +32,14 @@ jobs:
 
       - name: Select Xcode 16.2
         run: |
-          sudo xcode-select -s "$XCODE_PATH" || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
-          xcrun --sdk iphoneos --show-sdk-path
+          ls /Applications | grep -i xcode || true
+          sudo xcode-select -s "$XCODE_PATH" || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
+          xcodebuild -version || true
+          xcrun --sdk iphoneos --show-sdk-version || true
+          xcrun --sdk iphoneos --show-sdk-path || true
 
       - name: Install dependencies
-        run: brew install --quiet ldid xz gnu-sed || true
+        run: brew install --quiet ldid xz dpkg gnu-sed || brew install ldid xz dpkg gnu-sed || true
 
       - name: Setup Theos (pinned)
         run: |
@@ -51,20 +52,21 @@ jobs:
       - name: Build FBAudioFix (dylib)
         working-directory: FBAudioFix
         run: |
-          FB_LOG="${{ inputs.fb_log || env.FB_LOG_DEFAULT }}"
+          FB_LOG='${{ inputs.fb_log }}'; FB_LOG="${FB_LOG:-0}"
           EXTRA=""
           if [ "$FB_LOG" = "0" ]; then EXTRA='ADDITIONAL_CFLAGS=-DFB_AUDIOFIX_LOG_ENABLED=0'; fi
           echo "FB_LOG=$FB_LOG EXTRA=$EXTRA"
+          echo "THEOS=$THEOS"; ls "$THEOS" | head -n 20
           make clean
           # shellcheck disable=SC2086
-          make package THEOS_PACKAGE_SCHEME=rootless $EXTRA -j$(sysctl -n hw.ncpu)
-          find .theos packages -type f \( -name "*.dylib" -o -name "*.deb" \) | head -n 20
+          make THEOS_PACKAGE_SCHEME=rootless $EXTRA -j$(sysctl -n hw.ncpu)
+          find .theos -type f -name "*.dylib" | head -n 20
 
       - name: Build OpenInFacebookSafariExtension (appex)
         working-directory: OpenInFacebookSafariExtension/src
         run: |
           make clean
-          make package THEOS_PACKAGE_SCHEME=rootless -j$(sysctl -n hw.ncpu)
+          make THEOS_PACKAGE_SCHEME=rootless -j$(sysctl -n hw.ncpu)
           find .theos -type d -name "*.appex" | head -n 20
 
       - name: Collect artifacts

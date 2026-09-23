@@ -4,11 +4,15 @@
 #
 #   ./build.sh                                  # chỉ build
 #   ./build.sh Facebook-decrypted.ipa           # build + inject -> out/Facebook-patched.ipa
+#   ./build.sh --glow                           # tự tải Glow mới nhất từ esign.json rồi inject
+#   ./build.sh --glow out/Custom.ipa            # như trên, đặt tên output tùy ý
 #   FB_LOG=0 ./build.sh ...                     # tắt log file release (khuyên dùng khi inject)
 #   THEOS=~/theos ./build.sh ...
 #
-# Yêu cầu: theos, Xcode + iOS SDK, cyan (brew install --cask cyan hoặc build từ
-# https://github.com/asdfzxcvbn/cyan), ldid, insert_dylib (chỉ fallback).
+# Yêu cầu: theos, Xcode + iOS SDK, cyan (pipx install
+# https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip), ldid.
+ESIGN_JSON="${ESIGN_JSON:-https://raw.githubusercontent.com/lehieuitpro-maker/ipa/main/esign.json}"
+GLOW_NAME="${GLOW_NAME:-Glow for Facebook}"
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -30,10 +34,10 @@ fi
 
 echo "==> Build FBAudioFix (LOG=$FB_LOG)..."
 # shellcheck disable=SC2086
-make -C "$ROOT/FBAudioFix" clean package THEOS_PACKAGE_SCHEME="$SCHEME" $EXTRA_CFLAGS -j"$JOBS"
+make -C "$ROOT/FBAudioFix" clean THEOS_PACKAGE_SCHEME="$SCHEME" $EXTRA_CFLAGS -j"$JOBS"
 
 echo "==> Build OpenInFacebookSafariExtension..."
-make -C "$ROOT/OpenInFacebookSafariExtension/src" clean package THEOS_PACKAGE_SCHEME="$SCHEME" -j"$JOBS"
+make -C "$ROOT/OpenInFacebookSafariExtension/src" clean THEOS_PACKAGE_SCHEME="$SCHEME" -j"$JOBS"
 
 DYLIB="$(find "$ROOT/FBAudioFix/.theos" -name 'FBAudioFix.dylib' | head -n 1 || true)"
 APPEX_DIR="$(find "$ROOT/OpenInFacebookSafariExtension" -type d -name '*.appex' | head -n 1 || true)"
@@ -55,11 +59,41 @@ if [[ $# -eq 0 ]]; then
   exit 0
 fi
 
-INPUT="$1"
-OUTPUT="${2:-$OUT/Facebook-patched.ipa}"
+INPUT=""
+OUTPUT_OVERRIDE=""
+if [[ $# -ge 1 ]]; then
+  if [[ "$1" == "--glow" ]]; then
+    echo "==> Lấy link Glow mới nhất từ esign.json..."
+    read -r GLOW_URL GLOW_VER _ < <(python3 - "$ESIGN_JSON" "$GLOW_NAME" <<'EOF'
+import json, sys, urllib.request
+data = json.load(urllib.request.urlopen(sys.argv[1]))
+for app in data.get("apps", []):
+    if app.get("name") == sys.argv[2]:
+        print(app["downloadURL"], app.get("version", "unknown"), app.get("buildVersion", "unknown"))
+        break
+else:
+    sys.exit(1)
+EOF
+)
+    echo "Glow version=$GLOW_VER"
+    mkdir -p "$ROOT/input"
+    INPUT="$ROOT/input/Glow-$GLOW_VER-clean.ipa"
+    if [[ ! -f "$INPUT" ]]; then
+      curl --fail --location --retry 3 --retry-delay 2 "$GLOW_URL" -o "$INPUT"
+    else
+      echo "Dùng file đã tải: $INPUT"
+    fi
+    unzip -tq "$INPUT" >/dev/null
+    OUTPUT_OVERRIDE="${2:-$OUT/Glow-Facebook-$GLOW_VER-FBAudioFix.ipa}"
+  else
+    INPUT="$1"
+    OUTPUT_OVERRIDE="${2:-$OUT/Facebook-patched.ipa}"
+  fi
+fi
+OUTPUT="$OUTPUT_OVERRIDE"
 if [[ ! -f "$INPUT" ]]; then echo "error: không thấy IPA $INPUT" >&2; exit 1; fi
 if ! command -v cyan >/dev/null 2>&1; then
-  echo "error: cần tool 'cyan' để inject. brew install cyan / xem https://github.com/asdfzxcvbn/cyan" >&2
+  echo "error: cần tool 'cyan' để inject. pipx install https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip" >&2
   exit 1
 fi
 
@@ -67,4 +101,5 @@ ARGS=("$DYLIB")
 if [[ -n "$APPEX_DIR" ]]; then ARGS+=("$APPEX_DIR"); fi
 echo "==> cyan -f $INPUT + ${ARGS[*]} -> $OUTPUT"
 cyan -f -o "$OUTPUT" "$INPUT" "${ARGS[@]}"
+unzip -l "$OUTPUT" | grep -E 'FBAudioFix.dylib|OpenInFacebookSafariExtension.appex'
 echo "OK: $OUTPUT"
