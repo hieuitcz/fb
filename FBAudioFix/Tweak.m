@@ -3,7 +3,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <substrate.h>
-extern double sqrt(double);
+#import <math.h>
 #import <stdarg.h>
 
 static NSTimeInterval gLastConfirmedTap = 0.0;
